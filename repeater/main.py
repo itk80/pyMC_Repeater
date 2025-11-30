@@ -8,7 +8,7 @@ from repeater.engine import RepeaterHandler
 from repeater.http_server import HTTPStatsServer, _log_buffer
 from pymc_core.node.handlers.trace import TraceHandler
 from pymc_core.protocol.constants import MAX_PATH_SIZE, ROUTE_TYPE_DIRECT
-
+from src.nodes import upsert_node, get_all_nodes, mark_all_inactive
 logger = logging.getLogger("RepeaterDaemon")
 
 
@@ -124,6 +124,15 @@ class RepeaterDaemon:
 
     async def _repeater_callback(self, packet):
 
+        source_node_id = packet.source  # sender hash
+        upsert_node(
+            node_id=source_node_id,
+            rssi=getattr(packet, "rssi", None),
+            snr=getattr(packet, "snr", None),
+            via_node_id=None,  # not used now
+            hops=getattr(packet, "hops", 1)
+        )
+       
         if self.repeater_handler:
 
             metadata = {
@@ -345,6 +354,21 @@ class RepeaterDaemon:
         logger.info("Repeater daemon started")
 
         await self.initialize()
+        try:
+            known_nodes = get_all_nodes()
+            if known_nodes and hasattr(self.repeater_handler, 'discovered_nodes'):
+                for node in known_nodes:
+                    self.repeater_handler.discovered_nodes[node.node_id] = {
+                        "rssi": node.rssi or -999,
+                        "snr": node.snr or -20.0,
+                        "last_seen": node.last_seen.isoformat() + "Z",
+                        "first_seen": node.first_seen.isoformat() + "Z",
+                        "hops": node.hops,
+                        "via": node.via_node_id
+                    }
+                logger.info(f"Loaded {len(known_nodes)} known nodes from SQLite database")
+        except Exception as e:
+            logger.error(f"Failed to load nodes from DB: {e}")
 
         # Start HTTP stats server
         http_port = self.config.get("http", {}).get("port", 8000)
