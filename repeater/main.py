@@ -105,8 +105,28 @@ class RepeaterDaemon:
                 self.config, self.dispatcher, self.local_hash, send_advert_func=self.send_advert
             )
 
-            self.dispatcher.register_fallback_handler(self._repeater_callback)
-            logger.info("Repeater handler registered (forwarder mode)")
+# === REJESTRACJA JEDNEGO, POPRAWNEGO FALLBACK HANDLERA ===
+        # Usuwamy ewentualne stare handlery (bezpiecznik)
+        if hasattr(self.dispatcher, "handlers"):
+            self.dispatcher.handlers = [h for h in self.dispatcher.handlers if h != self._repeater_callback]
+
+        # Definiujemy opakowany callback, który ZAWSZE się wykona
+        original_callback = self._repeater_callback
+
+        async def persistent_repeater_callback(packet):
+            # ←←← TU ZAWSZE TRAFI KAŻDY PAKIET (w tym ADVERT) ←←←
+            if hasattr(packet, "source") and packet.source is not None:
+                upsert_node(
+                    node_id=int(packet.source),
+                    rssi=getattr(packet, "rssi", None),
+                    snr=getattr(packet, "snr", None),
+                    hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
+                )
+            await original_callback(packet)
+
+        # Rejestrujemy tylko ten jeden, poprawny handler
+        self.dispatcher.register_fallback_handler(persistent_repeater_callback)
+        logger.info("Repeater handler registered WITH persistent DB storage")
 
             self.trace_handler = TraceHandler(log_fn=logger.info)
             
