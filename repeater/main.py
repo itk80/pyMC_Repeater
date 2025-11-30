@@ -8,7 +8,7 @@ from repeater.engine import RepeaterHandler
 from repeater.http_server import HTTPStatsServer, _log_buffer
 from pymc_core.node.handlers.trace import TraceHandler
 from pymc_core.protocol.constants import MAX_PATH_SIZE, ROUTE_TYPE_DIRECT
-from src.nodes import upsert_node, get_all_nodes, mark_all_inactive
+from src.nodes import upsert_repeater, get_all_repeaters, mark_all_inactive
 logger = logging.getLogger("RepeaterDaemon")
 
 
@@ -110,7 +110,7 @@ class RepeaterDaemon:
                 # Zapis każdego pakietu z .source (w tym ADVERT) do bazy
                 if hasattr(packet, "source") and packet.source is not None:
                     try:
-                        upsert_node(
+                        upsert_repeater(
                             node_id=int(packet.source),
                             rssi=getattr(packet, "rssi", None),
                             snr=getattr(packet, "snr", None),
@@ -362,8 +362,6 @@ class RepeaterDaemon:
 
         await self.initialize()
 
-        # <<< WCZYTANIE ZNANYCH NODÓW Z BAZY PRZY STARTOWEJ INICJALIZACJI >>>
-         # Wczytaj repeaters z bazy do pamięci
         try:
             from src.nodes import get_all_repeaters
             for node in get_all_repeaters():
