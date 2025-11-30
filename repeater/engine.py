@@ -288,7 +288,16 @@ class RepeaterHandler(BaseHandler):
         return "Unknown"
 
     def _process_advert(self, packet: Packet, rssi: int, snr: float):
-
+        try:
+            from src.nodes import upsert_node
+            upsert_node(
+                node_id=int(packet.source),
+                rssi=rssi,
+                snr=snr,
+                hops=1
+            )
+        except Exception as E:
+            pass  # nie psujemy działania repeatera
         try:
             from pymc_core.protocol.constants import ADVERT_FLAG_IS_REPEATER
             from pymc_core.protocol.utils import (

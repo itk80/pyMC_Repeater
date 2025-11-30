@@ -363,27 +363,20 @@ class RepeaterDaemon:
         await self.initialize()
 
         # <<< WCZYTANIE ZNANYCH NODÓW Z BAZY PRZY STARTOWEJ INICJALIZACJI >>>
+         # Wczytaj repeaters z bazy do pamięci
         try:
-            known_nodes = get_all_nodes()
-            if known_nodes and hasattr(self.repeater_handler, 'discovered_nodes'):
-                loaded_count = 0
-                for node in known_nodes:
-                    if node.is_active or node.last_seen.year > 2020:  # filtr bezpieczeństwa
-                        self.repeater_handler.discovered_nodes[node.node_id] = {
-                            "rssi": node.rssi or -999,
-                            "snr": node.snr or -20.0,
-                            "last_seen": node.last_seen.isoformat() + "Z",
-                            "first_seen": node.first_seen.isoformat() + "Z",
-                            "hops": node.hops,
-                            "via": node.via_node_id,
-                            "is_active": node.is_active,
-                        }
-                        loaded_count += 1
-                logger.info(f"Loaded {loaded_count} known nodes from SQLite database")
-            else:
-                logger.info("No known nodes to load from database")
+            from src.nodes import get_all_repeaters
+            for node in get_all_repeaters():
+                if hasattr(self.repeater_handler, 'discovered_nodes'):
+                    self.repeater_handler.discovered_nodes[node.node_id] = {
+                        "rssi": node.rssi or -999,
+                        "snr": node.snr or -20,
+                        "last_seen": node.last_seen.isoformat() + "Z",
+                        "hops": 1
+                    }
+                logger.info(f"Restored from DB: {node.node_name or 'Unknown'} ({node.node_id})")
         except Exception as e:
-            logger.error(f"Failed to load nodes from DB: {e}")
+            logger.error(f"Failed to load from DB: {e}")
 
         # Start HTTP stats server
         http_port = self.config.get("http", {}).get("port", 8000)

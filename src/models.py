@@ -1,5 +1,5 @@
 # src/models.py
-from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, func
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
@@ -8,16 +8,18 @@ Base = declarative_base()
 class DiscoveredNode(Base):
     __tablename__ = "discovered_nodes"
 
-    node_id = Column(Integer, primary_key=True)     # adres LoRa, np. 0x12
-    node_name = Column(String, nullable=True)       # opcjonalnie
-    rssi = Column(Integer, nullable=True)
-    snr = Column(Float, nullable=True)
+    node_id = Column(Integer, primary_key=True)          # hash 0–255
+    pubkey = Column(String, unique=True, nullable=False) # pełny klucz publiczny (hex)
+    node_name = Column(String)
+    contact_type = Column(String)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    rssi = Column(Integer)
+    snr = Column(Float)
     first_seen = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    hops = Column(Integer, default=1)
-    via_node_id = Column(Integer, nullable=True)
+    advert_count = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
 
-# Tworzy tabelę przy pierwszym imporcie
 from .db import engine
 Base.metadata.create_all(engine)
