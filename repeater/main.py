@@ -124,17 +124,16 @@ class RepeaterDaemon:
 
     async def _repeater_callback(self, packet):
 
-        source_node_id = packet.source  # sender hash
-        upsert_node(
-            node_id=source_node_id,
-            rssi=getattr(packet, "rssi", None),
-            snr=getattr(packet, "snr", None),
-            via_node_id=None,  # not used now
-            hops=getattr(packet, "hops", 1)
-        )
-       
-        if self.repeater_handler:
+        if hasattr(packet, "source") and packet.source is not None:
+            upsert_node(
+                node_id=int(packet.source),  # na wszelki wypadek int()
+                rssi=getattr(packet, "rssi", None),
+                snr=getattr(packet, "snr", None),
+                via_node_id=None,
+                hops=getattr(packet, "hops", 1)
+            )
 
+        if self.repeater_handler:
             metadata = {
                 "rssi": getattr(packet, "rssi", 0),
                 "snr": getattr(packet, "snr", 0.0),
