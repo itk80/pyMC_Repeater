@@ -105,28 +105,22 @@ class RepeaterDaemon:
                 self.config, self.dispatcher, self.local_hash, send_advert_func=self.send_advert
             )
 
-# === REJESTRACJA JEDNEGO, POPRAWNEGO FALLBACK HANDLERA ===
-        # Usuwamy ewentualne stare handlery (bezpiecznik)
-        if hasattr(self.dispatcher, "handlers"):
-            self.dispatcher.handlers = [h for h in self.dispatcher.handlers if h != self._repeater_callback]
+# === POPRAWNA REJESTRACJA ZAPISU DO BAZY (działa na 100%) ===
+            async def db_wrapped_callback(packet):
+                # Każdy pakiet z .source (czyli ADVERT też!) trafia do bazy
+                if hasattr(packet, "source") and packet.source is not None:
+                    upsert_node(
+                        node_id=int(packet.source),
+                        rssi=getattr(packet, "rssi", None),
+                        snr=getattr(packet, "snr", None),
+                        hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
+                    )
+                # Przekazujemy dalej do oryginalnego handlera
+                await self._repeater_callback(packet)
 
-        # Definiujemy opakowany callback, który ZAWSZE się wykona
-        original_callback = self._repeater_callback
-
-        async def persistent_repeater_callback(packet):
-            # ←←← TU ZAWSZE TRAFI KAŻDY PAKIET (w tym ADVERT) ←←←
-            if hasattr(packet, "source") and packet.source is not None:
-                upsert_node(
-                    node_id=int(packet.source),
-                    rssi=getattr(packet, "rssi", None),
-                    snr=getattr(packet, "snr", None),
-                    hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
-                )
-            await original_callback(packet)
-
-        # Rejestrujemy tylko ten jeden, poprawny handler
-        self.dispatcher.register_fallback_handler(persistent_repeater_callback)
-        logger.info("Repeater handler registered WITH persistent DB storage")
+            # Rejestrujemy tylko ten jeden handler
+            self.dispatcher.register_fallback_handler(db_wrapped_callback)
+            logger.info("Repeater handler registered WITH persistent SQLite storage")
 
             self.trace_handler = TraceHandler(log_fn=logger.info)
             
