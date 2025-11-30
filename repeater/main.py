@@ -123,16 +123,23 @@ class RepeaterDaemon:
             raise
 
     async def _repeater_callback(self, packet):
-
+        # === TRWAŁE ZAPISYWANIE NODÓW – TERAZ WSZYSTKO TRAFIA DO BAZY! ===
+        # ADVERT (0x04) też ma .source – to właśnie z nich budujemy listę nodów!
         if hasattr(packet, "source") and packet.source is not None:
+            source_id = int(packet.source)
             upsert_node(
-                node_id=int(packet.source),  # na wszelki wypadek int()
+                node_id=source_id,
                 rssi=getattr(packet, "rssi", None),
                 snr=getattr(packet, "snr", None),
-                via_node_id=None,
-                hops=getattr(packet, "hops", 1)
+                hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
             )
+            # Opcjonalnie: log dla pewności
+            logger.debug(f"DB ← Node {source_id:>3} (type 0x{packet.get_payload_type():02x}) | RSSI {getattr(packet,'rssi','-??'):>4} | SNR {getattr(packet,'snr','-??'):>5}")
+        else:
+            # To się prawie nigdy nie zdarza – tylko jakieś dziwne pakiety
+            logger.debug(f"RX packet without source – type 0x{packet.get_payload_type():02x}")
 
+        # Przekazujemy dalej do oryginalnego handlera (routing, logi, dashboard)
         if self.repeater_handler:
             metadata = {
                 "rssi": getattr(packet, "rssi", 0),
