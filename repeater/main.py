@@ -105,20 +105,24 @@ class RepeaterDaemon:
                 self.config, self.dispatcher, self.local_hash, send_advert_func=self.send_advert
             )
 
-# === POPRAWNA REJESTRACJA ZAPISU DO BAZY (działa na 100%) ===
+            # === POPRAWNA REJESTRACJA FALLBACK HANDLERA Z ZAPIS DO BAZY ===
             async def db_wrapped_callback(packet):
-                # Każdy pakiet z .source (czyli ADVERT też!) trafia do bazy
+                # Zapis każdego pakietu z .source (w tym ADVERT) do bazy
                 if hasattr(packet, "source") and packet.source is not None:
-                    upsert_node(
-                        node_id=int(packet.source),
-                        rssi=getattr(packet, "rssi", None),
-                        snr=getattr(packet, "snr", None),
-                        hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
-                    )
-                # Przekazujemy dalej do oryginalnego handlera
+                    try:
+                        upsert_node(
+                            node_id=int(packet.source),
+                            rssi=getattr(packet, "rssi", None),
+                            snr=getattr(packet, "snr", None),
+                            hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
+                        )
+                        logger.debug(f"DB ← Node {int(packet.source):>3} (type 0x{packet.get_payload_type():02x}) | RSSI {getattr(packet,'rssi','-??'):>4} | SNR {getattr(packet,'snr','-??'):>5}")
+                    except Exception as e:
+                        logger.error(f"Upsert failed for node {packet.source}: {e}")
+                # Przekazujemy dalej do oryginalnego callback
                 await self._repeater_callback(packet)
 
-            # Rejestrujemy tylko ten jeden handler
+            # Rejestrujemy tylko ten jeden handler (bez duplikatów)
             self.dispatcher.register_fallback_handler(db_wrapped_callback)
             logger.info("Repeater handler registered WITH persistent SQLite storage")
 
@@ -130,31 +134,14 @@ class RepeaterDaemon:
             )
             logger.info("Trace handler registered for network diagnostics")
 
-            
-
         except Exception as e:
             logger.error(f"Failed to initialize dispatcher: {e}")
             raise
 
     async def _repeater_callback(self, packet):
-        # === TRWAŁE ZAPISYWANIE NODÓW – TERAZ WSZYSTKO TRAFIA DO BAZY! ===
-        # ADVERT (0x04) też ma .source – to właśnie z nich budujemy listę nodów!
-        if hasattr(packet, "source") and packet.source is not None:
-            source_id = int(packet.source)
-            upsert_node(
-                node_id=source_id,
-                rssi=getattr(packet, "rssi", None),
-                snr=getattr(packet, "snr", None),
-                hops=getattr(packet, "hops", 1) if hasattr(packet, "hops") else 1
-            )
-            # Opcjonalnie: log dla pewności
-            logger.debug(f"DB ← Node {source_id:>3} (type 0x{packet.get_payload_type():02x}) | RSSI {getattr(packet,'rssi','-??'):>4} | SNR {getattr(packet,'snr','-??'):>5}")
-        else:
-            # To się prawie nigdy nie zdarza – tylko jakieś dziwne pakiety
-            logger.debug(f"RX packet without source – type 0x{packet.get_payload_type():02x}")
 
-        # Przekazujemy dalej do oryginalnego handlera (routing, logi, dashboard)
         if self.repeater_handler:
+
             metadata = {
                 "rssi": getattr(packet, "rssi", 0),
                 "snr": getattr(packet, "snr", 0.0),
@@ -374,19 +361,27 @@ class RepeaterDaemon:
         logger.info("Repeater daemon started")
 
         await self.initialize()
+
+        # <<< WCZYTANIE ZNANYCH NODÓW Z BAZY PRZY STARTOWEJ INICJALIZACJI >>>
         try:
             known_nodes = get_all_nodes()
             if known_nodes and hasattr(self.repeater_handler, 'discovered_nodes'):
+                loaded_count = 0
                 for node in known_nodes:
-                    self.repeater_handler.discovered_nodes[node.node_id] = {
-                        "rssi": node.rssi or -999,
-                        "snr": node.snr or -20.0,
-                        "last_seen": node.last_seen.isoformat() + "Z",
-                        "first_seen": node.first_seen.isoformat() + "Z",
-                        "hops": node.hops,
-                        "via": node.via_node_id
-                    }
-                logger.info(f"Loaded {len(known_nodes)} known nodes from SQLite database")
+                    if node.is_active or node.last_seen.year > 2020:  # filtr bezpieczeństwa
+                        self.repeater_handler.discovered_nodes[node.node_id] = {
+                            "rssi": node.rssi or -999,
+                            "snr": node.snr or -20.0,
+                            "last_seen": node.last_seen.isoformat() + "Z",
+                            "first_seen": node.first_seen.isoformat() + "Z",
+                            "hops": node.hops,
+                            "via": node.via_node_id,
+                            "is_active": node.is_active,
+                        }
+                        loaded_count += 1
+                logger.info(f"Loaded {loaded_count} known nodes from SQLite database")
+            else:
+                logger.info("No known nodes to load from database")
         except Exception as e:
             logger.error(f"Failed to load nodes from DB: {e}")
 
