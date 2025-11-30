@@ -287,92 +287,110 @@ class RepeaterHandler(BaseHandler):
         # Default reason
         return "Unknown"
 
-    def _process_advert(self, packet: Packet, rssi: int, snr: float):
-        try:
-            from src.nodes import upsert_node
-            upsert_node(
-                node_id=int(packet.source),
-                rssi=rssi,
-                snr=snr,
-                hops=1
-            )
-        except Exception as E:
-            pass  # nie psujemy działania repeatera
-        try:
-            from pymc_core.protocol.constants import ADVERT_FLAG_IS_REPEATER
-            from pymc_core.protocol.utils import (
-                decode_appdata,
-                get_contact_type_name,
-                parse_advert_payload,
-            )
+ def _process_advert(self, packet: Packet, rssi: int, snr: float):
+    from src.nodes import upsert_repeater
 
-            # Parse advert payload
-            if not packet.payload or len(packet.payload) < 40:
+    try:
+        source_hash = packet.source
+        pubkey_hex = packet.payload[:32].hex() if packet.payload else ""
+
+        # Zapis do trwałej bazy
+        upsert_repeater(
+            pubkey=pubkey_hex,
+            node_id=int(source_hash),
+            node_name=None,  # zostanie uzupełnione poniżej
+            rssi=rssi,
+            snr=snr
+        )
+    except Exception as e:
+        pass  # nie psujemy działania
+
+    # === Oryginalna logika (pozostawiona bez zmian) ===
+    try:
+        from pymc_core.protocol.constants import ADVERT_FLAG_IS_REPEATER
+        from pymc_core.protocol.utils import decode_appdata, parse_advert_payload
+
+        if not packet.payload or len(packet.payload) < 40:
+            return
+
+        advert_data = parse_advert_payload(packet.payload)
+        pubkey = advert_data.get("pubkey", "")
+        if not pubkey:
+            return
+
+        if self.dispatcher and hasattr(self.dispatcher, "local_identity"):
+            local_pubkey = self.dispatcher.local_identity.get_public_key().hex()
+            if pubkey == local_pubkey:
                 return
 
-            advert_data = parse_advert_payload(packet.payload)
-            pubkey = advert_data.get("pubkey", "")
+        appdata = advert_data.get("appdata", b"")
+        if not appdata:
+            return
 
-            # Skip our own adverts
-            if self.dispatcher and hasattr(self.dispatcher, "local_identity"):
-                local_pubkey = self.dispatcher.local_identity.get_public_key().hex()
-                if pubkey == local_pubkey:
-                    logger.debug("Ignoring own advert in neighbor tracking")
-                    return
+        appdata_decoded = decode_appdata(appdata)
+        flags = appdata_decoded.get("flags", 0)
+        if not (flags & ADVERT_FLAG_IS_REPEATER):
+            return
 
-            appdata = advert_data.get("appdata", b"")
-            if not appdata:
-                return
+        from pymc_core.protocol.utils import determine_contact_type_from_flags, get_contact_type_name
+        contact_type_id = determine_contact_type_from_flags(flags)
+        contact_type = get_contact_type_name(contact_type_id)
 
-            appdata_decoded = decode_appdata(appdata)
-            flags = appdata_decoded.get("flags", 0)
+        node_name = appdata_decoded.get("node_name", "Unknown")
+        latitude = appdata_decoded.get("latitude")
+        longitude = appdata_decoded.get("longitude")
 
-            is_repeater = bool(flags & ADVERT_FLAG_IS_REPEATER)
+        # Aktualizacja w bazie z pełnymi danymi
+        upsert_repeater(
+            pubkey=pubkey,
+            node_id=int(packet.source),
+            node_name=node_name,
+            contact_type=contact_type,
+            latitude=latitude,
+            longitude=longitude,
+            rssi=rssi,
+            snr=snr
+        )
 
-            if not is_repeater:
-                return  # Not a repeater, skip
+        # Reszta oryginalnej logiki (neighbors, discovered_nodes)
+        current_time = time.time()
+        if pubkey not in self.neighbors:
+            self.neighbors[pubkey] = {
+                "node_name": node_name,
+                "contact_type": contact_type,
+                "latitude": latitude,
+                "longitude": longitude,
+                "first_seen": current_time,
+                "last_seen": current_time,
+                "rssi": rssi,
+                "snr": snr,
+                "advert_count": 1,
+            }
+            logger.info(f"Discovered new repeater: {node_name} ({pubkey[:16]}...)")
+        else:
+            neighbor = self.neighbors[pubkey]
+            neighbor.update({
+                "node_name": node_name,
+                "contact_type": contact_type,
+                "latitude": latitude,
+                "longitude": longitude,
+                "last_seen": current_time,
+                "rssi": rssi,
+                "snr": snr,
+                "advert_count": neighbor.get("advert_count", 0) + 1
+            })
 
-            from pymc_core.protocol.utils import determine_contact_type_from_flags
+        # Dodaj do discovered_nodes (dla starego dashboardu)
+        if hasattr(self, 'discovered_nodes'):
+            self.discovered_nodes[int(packet.source)] = {
+                "rssi": rssi,
+                "snr": snr,
+                "last_seen": datetime.utcnow().isoformat() + "Z",
+                "hops": 1
+            }
 
-            contact_type_id = determine_contact_type_from_flags(flags)
-            contact_type = get_contact_type_name(contact_type_id)
-
-            # Extract neighbor info
-            node_name = appdata_decoded.get("node_name", "Unknown")
-            latitude = appdata_decoded.get("latitude")
-            longitude = appdata_decoded.get("longitude")
-
-            current_time = time.time()
-
-            # Update or create neighbor entry
-            if pubkey not in self.neighbors:
-                self.neighbors[pubkey] = {
-                    "node_name": node_name,
-                    "contact_type": contact_type,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "first_seen": current_time,
-                    "last_seen": current_time,
-                    "rssi": rssi,
-                    "snr": snr,
-                    "advert_count": 1,
-                }
-                logger.info(f"Discovered new repeater: {node_name} ({pubkey[:16]}...)")
-            else:
-                # Update existing neighbor
-                neighbor = self.neighbors[pubkey]
-                neighbor["node_name"] = node_name  # Update name in case it changed
-                neighbor["contact_type"] = contact_type
-                neighbor["latitude"] = latitude
-                neighbor["longitude"] = longitude
-                neighbor["last_seen"] = current_time
-                neighbor["rssi"] = rssi
-                neighbor["snr"] = snr
-                neighbor["advert_count"] = neighbor.get("advert_count", 0) + 1
-
-        except Exception as e:
-            logger.debug(f"Error processing advert for neighbor tracking: {e}")
-
+    except Exception as e:
+        logger.debug(f"Error processing advert: {e}")
     def is_duplicate(self, packet: Packet) -> bool:
 
         pkt_hash = packet.calculate_packet_hash().hex()
